@@ -11,6 +11,7 @@ from telethon.sync import TelegramClient
 from telethon.errors import PasswordHashInvalidError, SessionPasswordNeededError
 from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import Channel, Chat
+from telethon.tl.types.auth import LoginTokenSuccess
 
 load_dotenv()
 
@@ -39,25 +40,40 @@ KEYWORDS = [
 OUTPUT_FILE = "channels_found.csv"
 
 
-def authorize_with_qr(client):
+async def authorize_with_qr(client, max_qr_attempts=3):
     """Authorize an unauthenticated Telethon client using a terminal QR code."""
-    if client.is_user_authorized():
+    if await client.is_user_authorized():
         return
 
-    while not client.is_user_authorized():
-        qr_login = client.qr_login()
+    for attempt in range(1, max_qr_attempts + 1):
+        qr_login = await client.qr_login()
+
+        # Telethon may return an already accepted token if it was scanned
+        # just before the previous wait started.
+        if isinstance(qr_login._resp, LoginTokenSuccess):
+            await client._on_login(qr_login._resp.authorization.user)
+            break
+
         qr = qrcode.QRCode(border=2)
         qr.add_data(qr_login.url)
         qr.make(fit=True)
+
+        wait_task = asyncio.create_task(qr_login.wait())
+        await asyncio.sleep(0)
 
         print("\nTelegram → Settings → Devices → Link Desktop Device")
         print("Отсканируй QR-код в Telegram:")
         qr.print_ascii(tty=sys.stdout.isatty(), invert=True)
 
         try:
-            qr_login.wait()
+            await wait_task
         except asyncio.TimeoutError:
-            print("QR-код истёк. Создаю новый...")
+            if attempt == max_qr_attempts:
+                raise RuntimeError(
+                    "Не удалось авторизоваться: время ожидания QR-кода истекло. "
+                    "Запусти программу снова, чтобы повторить попытку."
+                )
+            print(f"QR-код истёк. Создаю новый ({attempt + 1}/{max_qr_attempts})...")
             continue
         except SessionPasswordNeededError:
             while True:
@@ -66,10 +82,16 @@ def authorize_with_qr(client):
                     print("Пароль не может быть пустым.")
                     continue
                 try:
-                    client.sign_in(password=password)
+                    await client.sign_in(password=password)
                     break
                 except PasswordHashInvalidError:
                     print("Неверный пароль. Попробуй ещё раз.")
+
+        if await client.is_user_authorized():
+            break
+
+    if not await client.is_user_authorized():
+        raise RuntimeError("Telegram authorization did not complete.")
 
     print("Telegram authorization successful. Session saved.")
 
@@ -107,7 +129,7 @@ def main():
 
     client = TelegramClient(SESSION_NAME, int(API_ID), API_HASH)
     client.connect()
-    authorize_with_qr(client)
+    client.loop.run_until_complete(authorize_with_qr(client))
 
     seen = {}
     try:
