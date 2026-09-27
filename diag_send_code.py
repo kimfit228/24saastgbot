@@ -15,11 +15,8 @@ client.connect()
 try:
     sent = client.send_code_request(PHONE)
     print("1-й запрос -> type:", sent.type, "| next_type:", sent.next_type, "| timeout:", sent.timeout)
-
-    print("\nПробую принудительно через SMS...")
-    sent2 = client.send_code_request(PHONE, force_sms=True)
-    print("2-й запрос (force_sms) -> type:", sent2.type, "| next_type:", sent2.next_type, "| timeout:", sent2.timeout)
 except Exception as e:
-    print(f"ОШИБКА: {type(e).__name__}: {e}")
+    import traceback
+    traceback.print_exc()
 finally:
     client.disconnect()

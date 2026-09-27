@@ -1,11 +1,14 @@
 
+import asyncio
 import csv
+import getpass
 import os
 import sys
 
+import qrcode
 from dotenv import load_dotenv
 from telethon.sync import TelegramClient
-from telethon.errors import SessionPasswordNeededError
+from telethon.errors import PasswordHashInvalidError, SessionPasswordNeededError
 from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import Channel, Chat
 
@@ -34,6 +37,41 @@ KEYWORDS = [
 ]
 
 OUTPUT_FILE = "channels_found.csv"
+
+
+def authorize_with_qr(client):
+    """Authorize an unauthenticated Telethon client using a terminal QR code."""
+    if client.is_user_authorized():
+        return
+
+    while not client.is_user_authorized():
+        qr_login = client.qr_login()
+        qr = qrcode.QRCode(border=2)
+        qr.add_data(qr_login.url)
+        qr.make(fit=True)
+
+        print("\nTelegram → Settings → Devices → Link Desktop Device")
+        print("Отсканируй QR-код в Telegram:")
+        qr.print_ascii(tty=sys.stdout.isatty(), invert=True)
+
+        try:
+            qr_login.wait()
+        except asyncio.TimeoutError:
+            print("QR-код истёк. Создаю новый...")
+            continue
+        except SessionPasswordNeededError:
+            while True:
+                password = getpass.getpass("Введи пароль двухфакторной аутентификации Telegram: ")
+                if not password:
+                    print("Пароль не может быть пустым.")
+                    continue
+                try:
+                    client.sign_in(password=password)
+                    break
+                except PasswordHashInvalidError:
+                    print("Неверный пароль. Попробуй ещё раз.")
+
+    print("Telegram authorization successful. Session saved.")
 
 
 def search_keyword(client, keyword, limit=30):
@@ -69,33 +107,7 @@ def main():
 
     client = TelegramClient(SESSION_NAME, int(API_ID), API_HASH)
     client.connect()
-
-    if not client.is_user_authorized():
-        phone = input("Номер телефона (в формате +77711664767): ").strip()
-        sent = client.send_code_request(phone)
-        print(f"Код отправлен (тип: {sent.type}).")
-        if "App" in type(sent.type).__name__:
-            print("Это сообщение придёт ВНУТРИ Telegram, в служебный чат «Telegram»,")
-            print("но только на устройство/сессию, где этот номер уже залогинен сейчас")
-            print("(например, в той же вкладке web.telegram.org, где ты недавно входил).")
-        print(f"Если не придёт за {sent.timeout} сек, жми Enter пустым — закажу отправку через: {sent.next_type}")
-        code = input("Введи код из сообщения (или Enter, если не пришёл): ").strip()
-        while not code:
-            try:
-                sent = client.send_code_request(phone)
-            except Exception as e:
-                print(f"Не удалось запросить код повторно: {type(e).__name__}: {e}")
-                print("Это ограничение на стороне Telegram для текущего API_ID — код тут не поможет.")
-                print("Подожди подольше или создай новый API_ID/API_HASH на my.telegram.org.")
-                sys.exit(1)
-            print(f"Повторно отправлено, тип: {sent.type}")
-            code = input("Введи код из сообщения (или Enter, если не пришёл): ").strip()
-        try:
-            client.sign_in(phone, code)
-        except SessionPasswordNeededError:
-            password = input("Включена двухфакторная аутентификация, введи пароль: ")
-            client.sign_in(password=password)
-        print("Вход выполнен, сессия сохранена — при следующем запуске логиниться не нужно.")
+    authorize_with_qr(client)
 
     seen = {}
     try:
