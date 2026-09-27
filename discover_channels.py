@@ -5,6 +5,7 @@ import sys
 
 from dotenv import load_dotenv
 from telethon.sync import TelegramClient
+from telethon.errors import SessionPasswordNeededError
 from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import Channel, Chat
 
@@ -66,8 +67,38 @@ def main():
         print("Заполни их в файле .env (см. .env.example) и запусти снова.")
         sys.exit(1)
 
+    client = TelegramClient(SESSION_NAME, int(API_ID), API_HASH)
+    client.connect()
+
+    if not client.is_user_authorized():
+        phone = input("Номер телефона (в формате +77711664767): ").strip()
+        sent = client.send_code_request(phone)
+        print(f"Код отправлен (тип: {sent.type}).")
+        if "App" in type(sent.type).__name__:
+            print("Это сообщение придёт ВНУТРИ Telegram, в служебный чат «Telegram»,")
+            print("но только на устройство/сессию, где этот номер уже залогинен сейчас")
+            print("(например, в той же вкладке web.telegram.org, где ты недавно входил).")
+        print(f"Если не придёт за {sent.timeout} сек, жми Enter пустым — закажу отправку через: {sent.next_type}")
+        code = input("Введи код из сообщения (или Enter, если не пришёл): ").strip()
+        while not code:
+            try:
+                sent = client.send_code_request(phone)
+            except Exception as e:
+                print(f"Не удалось запросить код повторно: {type(e).__name__}: {e}")
+                print("Это ограничение на стороне Telegram для текущего API_ID — код тут не поможет.")
+                print("Подожди подольше или создай новый API_ID/API_HASH на my.telegram.org.")
+                sys.exit(1)
+            print(f"Повторно отправлено, тип: {sent.type}")
+            code = input("Введи код из сообщения (или Enter, если не пришёл): ").strip()
+        try:
+            client.sign_in(phone, code)
+        except SessionPasswordNeededError:
+            password = input("Включена двухфакторная аутентификация, введи пароль: ")
+            client.sign_in(password=password)
+        print("Вход выполнен, сессия сохранена — при следующем запуске логиниться не нужно.")
+
     seen = {}
-    with TelegramClient(SESSION_NAME, int(API_ID), API_HASH) as client:
+    try:
         for kw in KEYWORDS:
             print(f"Ищу: {kw} ...")
             try:
@@ -82,6 +113,8 @@ def main():
                     seen[key] = r
                     new_count += 1
             print(f"  найдено: {len(results)}, из них новых: {new_count}, всего уникальных: {len(seen)}")
+    finally:
+        client.disconnect()
 
     def sort_key(r):
         p = r["participants"]
